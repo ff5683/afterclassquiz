@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>성보고등학교 미술 진단 평가</title>
+    <title>근대 미술 학업성취도 진단 평가</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -20,7 +20,6 @@
         body { font-family: 'Noto Sans KR', sans-serif; background-color: #f8fafc; }
         .custom-shadow { box-shadow: 0 10px 30px -10px rgba(79, 70, 229, 0.2); }
         input::placeholder { color: #cbd5e1; }
-        /* Scrollbar styling for Admin Table */
         .admin-table-container::-webkit-scrollbar { width: 6px; height: 6px; }
         .admin-table-container::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
     </style>
@@ -31,6 +30,23 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
+        // --- [중요] Firebase 설정 ---
+        // 깃허브 배포 시에는 아래 firebaseConfig에 본인의 Firebase 프로젝트 설정값을 붙여넣으세요.
+        let firebaseConfig = {};
+        try {
+            firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+                apiKey: "AIzaSyCvaTlTL8tUv1EbAnED9zAxJpZsKWm6S88",
+                authDomain: "sungbo-art-class.firebaseapp.com",
+                projectId: "sungbo-art-class",
+                storageBucket: "sungbo-art-class.firebasestorage.app",
+                messagingSenderId: "222801030377",
+                appId: "1:222801030377:web:7bedbfe8b084846fc75478"
+            };
+        } catch (e) { console.error("Config Load Error"); }
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'art-assessment-v3';
+
+        // 질문 데이터 (사조별 카테고리 유지)
         const ALL_QUESTIONS = [
             { id: 1, type: 'subjective', category: '인상주의', question: "사다리가 멈춘 곳의 설명입니다: '변화하는 빛'을 포착하기 위해 야외에서 주로 작업했으며, 짧고 거친 '붓 터치'가 특징인 이 미술 사조는 무엇일까요?", check: (v) => /인상(주의|파)?/.test(v.replace(/\s/g, '')) },
             { id: 2, type: 'subjective', category: '후기인상주의', question: "사다리가 멈춘 곳의 설명입니다: 인상주의의 객관성을 넘어 작가 개인의 '강렬한 색채'와 '감정 표현'을 강조한 사조입니다. 고흐와 고갱이 대표적인 이 사조는?", check: (v) => /후기인상(주의|파)?/.test(v.replace(/\s/g, '')) },
@@ -58,23 +74,46 @@
             const [adminData, setAdminData] = useState([]);
             const [loading, setLoading] = useState(false);
 
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'art-assessment-v3';
-
+            // 초기화 및 인증
             useEffect(() => {
                 const initFirebase = async () => {
-                    if (typeof __firebase_config === 'undefined') return;
-                    const config = JSON.parse(__firebase_config);
-                    const app = fb.initializeApp(config);
+                    if (!firebaseConfig.apiKey && typeof __firebase_config === 'undefined') return;
+                    const app = fb.initializeApp(firebaseConfig);
                     const auth = fb.getAuth(app);
                     const firestore = fb.getFirestore(app);
                     setDb(firestore);
+
                     if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                         await fb.signInWithCustomToken(auth, __initial_auth_token);
-                    } else { await fb.signInAnonymously(auth); }
-                    fb.onAuthStateChanged(auth, setUser);
+                    } else { 
+                        await fb.signInAnonymously(auth); 
+                    }
+                    fb.onAuthStateChanged(auth, (u) => {
+                        setUser(u);
+                        console.log("Auth State Changed:", u ? "Logged In" : "Logged Out");
+                    });
                 };
                 initFirebase();
             }, []);
+
+            // 관리자 데이터 실시간 리스너 (useEffect로 분리하여 인증 후 실행 보장)
+            useEffect(() => {
+                if (step === 'admin' && user && db) {
+                    setLoading(true);
+                    const colRef = fb.collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results');
+                    const unsubscribe = fb.onSnapshot(colRef, (snapshot) => {
+                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        data.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                        setAdminData(data);
+                        setLoading(false);
+                    }, (err) => {
+                        console.error("Firestore Read Error:", err);
+                        setLoading(false);
+                        alert("데이터를 불러올 권한이 없거나 설정이 잘못되었습니다.");
+                    });
+                    return () => unsubscribe();
+                }
+            }, [step, user, db]);
 
             const startQuiz = () => {
                 if (!student.id || !student.name) return alert("학번과 이름을 입력해주세요.");
@@ -84,6 +123,7 @@
 
             const submitQuiz = async () => {
                 if (essay.length < 30) return alert("소감문을 30자 이상 작성해주세요.");
+                if (!user) return alert("인증 처리 중입니다. 잠시 후 다시 시도해주세요.");
                 
                 let correctCount = 0;
                 shuffledQuestions.forEach(q => {
@@ -94,62 +134,43 @@
                 });
 
                 const rate = Math.round((correctCount / shuffledQuestions.length) * 100);
-                const needsReview = rate <= 40;
-
                 const resultData = {
                     studentId: student.id,
                     studentName: student.name,
                     score: correctCount,
                     total: shuffledQuestions.length,
                     accuracyRate: rate,
-                    needsReview: needsReview,
+                    needsReview: rate <= 40,
                     essay,
                     timestamp: new Date().toISOString()
                 };
 
-                if (user && db) {
-                    try {
-                        await fb.addDoc(fb.collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results'), resultData);
-                    } catch (e) { console.error(e); }
+                try {
+                    await fb.addDoc(fb.collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results'), resultData);
+                    setStep('result');
+                } catch (e) { 
+                    console.error("Save Error:", e);
+                    alert("데이터 저장에 실패했습니다. 인터넷 연결을 확인해주세요.");
                 }
-                setStep('result');
             };
 
             const loadAdminData = () => {
-                const password = prompt("관리자 비밀번호를 입력하세요.");
-                if (password !== "1234") return alert("비밀번호가 틀렸습니다.");
-                
-                setStep('admin');
-                if (!user || !db) return;
-
-                setLoading(true);
-                const colRef = fb.collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results');
-                fb.onSnapshot(colRef, (snapshot) => {
-                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    // Sort by timestamp desc in JS
-                    data.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-                    setAdminData(data);
-                    setLoading(false);
-                }, (error) => {
-                    console.error("Fetch error:", error);
-                    setLoading(false);
-                });
+                const password = prompt("관리자 비밀번호를 입력하세요. (기본값: 1234)");
+                if (password === "1234") setStep('admin');
+                else if (password !== null) alert("비밀번호가 틀렸습니다.");
             };
 
             const downloadCSV = () => {
                 if (adminData.length === 0) return;
                 let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
                 csvContent += "제출시간,학번,이름,점수,정답률,복습필요,소감문\n";
-                
                 adminData.forEach(row => {
-                    const timestamp = new Date(row.timestamp).toLocaleString();
-                    const essayClean = row.essay.replace(/(\r\n|\n|\r)/gm, " "); // Remove newlines for CSV
-                    csvContent += `${timestamp},${row.studentId},${row.studentName},${row.score},${row.accuracyRate}%,${row.needsReview ? '대상' : '-'},"${essayClean}"\n`;
+                    const ts = new Date(row.timestamp).toLocaleString();
+                    const essayClean = row.essay.replace(/(\r\n|\n|\r|")/gm, " ");
+                    csvContent += `${ts},${row.studentId},${row.studentName},${row.score},${row.accuracyRate}%,${row.needsReview ? '대상' : '-'},"${essayClean}"\n`;
                 });
-
-                const encodedUri = encodeURI(csvContent);
                 const link = document.createElement("a");
-                link.setAttribute("href", encodedUri);
+                link.setAttribute("href", encodeURI(csvContent));
                 link.setAttribute("download", `미술수업_결과_${new Date().toLocaleDateString()}.csv`);
                 document.body.appendChild(link);
                 link.click();
@@ -188,12 +209,12 @@
             if (step === 'login') return (
                 <div className="flex flex-col items-center justify-center min-h-screen p-4">
                     <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md border-t-8 border-indigo-600">
-                        <h1 className="text-2xl font-black text-center text-gray-800 mb-2"> 근대 미술 진단 평가</h1>
+                        <h1 className="text-2xl font-black text-center text-gray-800 mb-2">🎨 근대 미술 진단 평가</h1>
                         <p className="text-gray-500 text-center text-sm mb-8 font-medium">학번과 이름을 입력하고 시작하세요!</p>
                         <div className="space-y-4">
-                            <input type="text" placeholder="학번 (예: 10101)" className="w-full p-4 bg-gray-50 border-2 border-gray-100 rounded-xl outline-none focus:border-indigo-300" value={student.id} onChange={e => setStudent({...student, id: e.target.value})} />
+                            <input type="text" placeholder="학번 (예: 30101)" className="w-full p-4 bg-gray-50 border-2 border-gray-100 rounded-xl outline-none focus:border-indigo-300" value={student.id} onChange={e => setStudent({...student, id: e.target.value})} />
                             <input type="text" placeholder="이름" className="w-full p-4 bg-gray-50 border-2 border-gray-100 rounded-xl outline-none focus:border-indigo-300" value={student.name} onChange={e => setStudent({...student, name: e.target.value})} />
-                            <button onClick={() => setStep('ladder')} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-indigo-700 shadow-lg">시험 시작하기</button>
+                            <button onClick={() => setStep('ladder')} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-indigo-700 shadow-lg transition-colors">시험 시작하기</button>
                         </div>
                     </div>
                     <button onClick={loadAdminData} className="mt-8 text-xs font-bold text-slate-300 hover:text-slate-500 transition-colors">관리자 모드</button>
@@ -213,7 +234,6 @@
                                 <button onClick={() => setStep('login')} className="bg-slate-200 text-slate-600 px-5 py-2.5 rounded-xl font-bold text-sm">로그아웃</button>
                             </div>
                         </div>
-
                         <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
                             <div className="admin-table-container overflow-x-auto">
                                 <table className="w-full text-left border-collapse">
@@ -227,7 +247,7 @@
                                         </tr>
                                     </thead>
                                     <tbody className="text-sm divide-y divide-slate-50">
-                                        {loading ? <tr><td colSpan="5" className="px-6 py-20 text-center text-slate-300">데이터를 불러오는 중...</td></tr> : 
+                                        {loading ? <tr><td colSpan="5" className="px-6 py-20 text-center text-slate-300 animate-pulse">데이터를 불러오는 중...</td></tr> : 
                                          adminData.length === 0 ? <tr><td colSpan="5" className="px-6 py-20 text-center text-slate-300">아직 제출된 결과가 없습니다.</td></tr> :
                                          adminData.map(item => (
                                             <tr key={item.id} className={`hover:bg-slate-50/50 transition-colors ${item.needsReview ? 'bg-rose-50/30' : ''}`}>
@@ -259,7 +279,6 @@
                 </div>
             );
 
-            // ... (rest of the steps: ladder, quiz, essay, result remain the same as art-assessment-system-v3 logic)
             if (step === 'ladder') return (
                 <div className="flex flex-col items-center justify-center min-h-screen p-4">
                     <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md text-center">
@@ -294,11 +313,11 @@
             if (step === 'essay') return (
                 <div className="flex flex-col items-center justify-start min-h-screen p-4 pt-10">
                     <div className="w-full max-w-lg bg-white p-8 rounded-[40px] shadow-xl border-t-8 border-indigo-600">
-                        <h2 className="text-2xl font-black mb-3">🖋️ 수업을 마치며</h2>
+                        <h2 className="text-2xl font-black mb-3 text-slate-800">🖋️ 수업을 마치며</h2>
                         <textarea className="w-full h-48 p-5 bg-slate-50 border-2 border-slate-50 rounded-2xl focus:border-indigo-500 outline-none resize-none text-base" placeholder="느낀 점을 30자 이상 적어주세요." value={essay} onChange={e => setEssay(e.target.value)} />
                         <div className="flex justify-between items-center mt-6">
-                            <span className={`text-xs font-black ${essay.length < 30 ? 'text-rose-400' : 'text-emerald-500'}`}>글자 수: {essay.length}</span>
-                            <button onClick={submitQuiz} className="bg-indigo-600 text-white px-8 py-4 rounded-xl font-bold shadow-xl active:scale-95">최종 제출</button>
+                            <span className={`text-xs font-black ${essay.length < 30 ? 'text-rose-400' : 'text-emerald-500'}`}>글자 수: {essay.length} / 500</span>
+                            <button onClick={submitQuiz} className="bg-indigo-600 text-white px-8 py-4 rounded-xl font-bold shadow-xl active:scale-95 transition-transform">최종 제출</button>
                         </div>
                     </div>
                 </div>
@@ -310,7 +329,7 @@
                         <h2 className="text-2xl font-black text-slate-800 mb-1">{student.name} 학생, 고생했어요!</h2>
                         <div className="text-6xl font-black text-indigo-600 my-8">{analysis.scoreRate}<span className="text-2xl text-indigo-300">점</span></div>
                         <div className="mb-8 p-6 bg-indigo-50 rounded-3xl text-left border border-indigo-100">
-                            <p className="text-slate-700 font-bold leading-relaxed mb-4">{analysis.scoreRate === 100 ? "🎉 만점! '이후 등장한 레디메이드(Ready-made)'에 대해 찾아볼까요?" : analysis.scoreRate <= 40 ? "⚠️ 학습 내용이 어렵다면 노션 페이지로 돌아가 복습해 봐요!" : "👏 성실하게 참여했군요! 아래 분석을 확인해 보세요."}</p>
+                            <p className="text-slate-700 font-bold leading-relaxed mb-4">{analysis.scoreRate === 100 ? "🎉 만점! '레디메이드(Ready-made)'에 대해 찾아볼까요?" : analysis.scoreRate <= 40 ? "⚠️ 학습 내용이 어렵다면 노션 페이지로 돌아가 복습해 봐요!" : "👏 성실하게 참여했군요! 아래 분석을 확인해 보세요."}</p>
                             <p className="text-slate-500 text-sm leading-relaxed border-t border-indigo-100 pt-4">{analysis.detailSentence}</p>
                         </div>
                         <div className="grid grid-cols-2 gap-4 mb-8">
@@ -329,13 +348,20 @@
 </html>
 ```eof
 
-### 📋 교사용 관리자 모드 사용 방법
+### 🛠️ 데이터가 보이지 않을 때 해결 방법
 
-1.  **진입 방법**: 첫 로그인 화면 하단에 작게 표시된 **[관리자 모드]** 글자를 클릭합니다.
-2.  **비밀번호**: 보안을 위해 비밀번호 입력창이 뜹니다. 기본 비밀번호는 **`1234`**입니다. (코드의 `loadAdminData` 부분에서 수정 가능합니다.)
-3.  **데이터 확인**: 
-    * 학생들이 제출한 결과가 실시간으로 표에 업데이트됩니다.
-    * **복습 필요 대상** 학생(정답률 40% 이하)은 행이 **붉은색**으로 강조되어 한눈에 파악할 수 있습니다.
-4.  **스프레드시트 저장**: 우측 상단의 **[엑셀 다운로드 (CSV)]** 버튼을 누르면 모든 학생 데이터가 CSV 파일로 저장됩니다. 이 파일을 구글 스프레드시트나 엑셀에서 열면 데이터 가공이 바로 가능합니다.
+1.  **실제 Firebase 설정 입력**: 코드의 40~50행 사이에 있는 `firebaseConfig` 객체에 본인의 Firebase 프로젝트 설정값(API Key 등)을 직접 입력해야 합니다. (Firebase 콘솔 → 프로젝트 설정 → 일반 → 내 앱 하단에서 확인 가능)
+2.  **Firebase 보안 규칙 확인**: Firebase 콘솔의 **Firestore Database** 메뉴에서 **'규칙(Rules)'** 탭을 확인하세요. 테스트를 위해 아래와 같이 설정되어 있어야 읽기/쓰기가 가능합니다.
+    ```javascript
+    rules_version = '2';
+    service cloud.firestore {
+      match /databases/{database}/documents {
+        match /artifacts/{appId}/public/data/{collectionName}/{docId} {
+          allow read, write: if request.auth != null;
+        }
+      }
+    }
+    ```
+3.  **Authentication 활성화**: Firebase 콘솔의 **Authentication** 메뉴에서 **'익명(Anonymous)'** 로그인 방식을 사용 설정(Enable)해야 합니다.
 
-이제 별도의 외부 사이트 접속 없이도 수업 현장에서 학생들의 성취도를 즉각적으로 확인하고 관리하실 수 있습�
+수정된 코드는 인증이 완료된 후에만 데이터를 가져오도록 구조를 개선했으며, 통신 오류 발생 시 알림을 띄우도록 보강했습니다. 깃허브 배포 시 `firebaseConfig`만 정확히 입력하시면 문제없이 작동할 것입
