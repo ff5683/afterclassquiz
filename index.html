@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>근대 미술 학업성취도 진단 평가</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, collection, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        window.fb = { initializeApp, getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, getFirestore, doc, setDoc, collection, addDoc };
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap');
+        body { font-family: 'Noto Sans KR', sans-serif; background-color: #f8fafc; }
+        .ladder-line { transition: all 0.5s ease; }
+        .glass-card { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); }
+        input::placeholder { color: #cbd5e1; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- Question Data (12 Questions) ---
+        const ALL_QUESTIONS = [
+            // [Subjective]
+            { 
+                id: 1, type: 'subjective', category: '인상주의', 
+                question: "사다리가 멈춘 곳의 설명입니다: '변화하는 빛'을 포착하기 위해 야외에서 주로 작업했으며, 짧고 거친 '붓 터치'가 특징인 이 미술 사조는 무엇일까요?",
+                check: (val) => /인상(주의|파)?/.test(val.replace(/\s/g, '')),
+                correctText: "인상주의"
+            },
+            { 
+                id: 2, type: 'subjective', category: '후기인상주의', 
+                question: "사다리가 멈춘 곳의 설명입니다: 인상주의의 객관성을 넘어 작가 개인의 '강렬한 색채'와 '감정 표현'을 강조한 사조입니다. 고흐와 고갱이 대표적인 이 사조는?",
+                check: (val) => /후기인상(주의|파)?/.test(val.replace(/\s/g, '')),
+                correctText: "후기인상주의"
+            },
+            { 
+                id: 3, type: 'subjective', category: '입체주의', 
+                question: "사다리가 멈춘 곳의 설명입니다: 대상을 '다양한 각도'에서 바라보고 이를 한 화면에 '입체적'으로 재구성한 사조입니다. 피카소가 창시한 이 사조는?",
+                check: (val) => /입체(주의|파)?/.test(val.replace(/\s/g, '')),
+                correctText: "입체주의"
+            },
+            { 
+                id: 4, type: 'subjective', category: '표현주의', 
+                question: "사다리가 멈춘 곳의 설명입니다: 형태의 왜곡과 강렬한 색을 통해 인간 내면의 '불안, 공포 등의 감정'을 마치 '폭발'하듯 드러낸 미술 사조는 무엇일까요?",
+                check: (val) => /표현(주의|파)?/.test(val.replace(/\s/g, '')),
+                correctText: "표현주의"
+            },
+            {
+                id: 5, type: 'subjective', category: '공통배경',
+                question: "앞서 학습한 다양한 근대 미술 형식들이 등장하게 된 결정적인 사회적 계기는 무엇일까요? (재현의 의무를 예술에서 덜어준 기술적 발명)",
+                check: (val) => /(사진|카메라)/.test(val.replace(/\s/g, '')),
+                correctText: "사진술/카메라의 발명"
+            },
+            // [O/X]
+            {
+                id: 6, type: 'ox', category: '인상주의',
+                question: "인상주의 화가들은 빛의 변화를 관찰하기 위해 대부분의 시간을 실내 작업실(아틀리에) 안에서만 보냈다.",
+                answer: 'X',
+                rationale: "인상주의자들은 빛을 직접 관찰하기 위해 캔버스를 들고 야외로 나갔습니다."
+            },
+            {
+                id: 7, type: 'ox', category: '표현주의',
+                question: "표현주의는 대상을 예쁘고 사실적으로 그리는 것보다 작가의 주관적인 감정 표출을 더 중요하게 생각했다.",
+                answer: 'O',
+                rationale: "표현주의는 작가의 내면적 고통이나 감정을 강하게 드러내는 것이 핵심입니다."
+            },
+            {
+                id: 8, type: 'ox', category: '입체주의',
+                question: "피카소의 입체주의는 사물을 오직 한 방향에서만 바라보고 그려야 한다는 전통적인 원근법을 철저히 지켰다.",
+                answer: 'X',
+                rationale: "입체주의는 여러 방향에서 본 모습을 한 화면에 합치는 '다시점'을 사용했습니다."
+            },
+            // [MCQ]
+            {
+                id: 9, type: 'mcq', category: '후기인상주의',
+                question: "다음 중 후기인상주의의 특징으로 가장 적절한 것은 무엇인가요?",
+                options: ["원근법의 엄격한 준수", "작가 개인의 개성과 내면 세계 강조", "감정 배제와 기계적 묘사", "신화와 역사적 사건의 재현"],
+                answer: 1
+            },
+            {
+                id: 10, type: 'mcq', category: '인상주의',
+                question: "인상주의 화가들이 사물의 고유한 색보다 더 중요하게 생각했던 요소는?",
+                options: ["물체의 무게감", "종교적 상징성", "태양 광선과 빛의 변화", "수학적 비례"],
+                answer: 2
+            },
+            {
+                id: 11, type: 'mcq', category: '입체주의',
+                question: "입체주의 작품에서 대상을 기하학적 조각으로 나누어 표현한 주된 이유는?",
+                options: ["대상의 본질을 여러 시점에서 분석하기 위해", "물감이 부족해서", "그림을 빨리 완성하기 위해", "종교적 의미를 담기 위해"],
+                answer: 0
+            },
+            {
+                id: 12, type: 'mcq', category: '표현주의',
+                question: "에드바르 뭉크의 '절규'와 가장 관련이 깊은 미술 사조는?",
+                options: ["인상주의", "입체주의", "표현주의", "사실주의"],
+                answer: 2
+            }
+        ];
+
+        const App = () => {
+            const [step, setStep] = useState('login'); 
+            const [student, setStudent] = useState({ id: '', name: '' });
+            const [shuffledQuestions, setShuffledQuestions] = useState([]);
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [answers, setAnswers] = useState({});
+            const [essay, setEssay] = useState('');
+            const [db, setDb] = useState(null);
+            const [user, setUser] = useState(null);
+
+            useEffect(() => {
+                const initFirebase = async () => {
+                    if (typeof __firebase_config === 'undefined') return;
+                    const config = JSON.parse(__firebase_config);
+                    const app = fb.initializeApp(config);
+                    const auth = fb.getAuth(app);
+                    const firestore = fb.getFirestore(app);
+                    setDb(firestore);
+
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await fb.signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await fb.signInAnonymously(auth);
+                    }
+                    fb.onAuthStateChanged(auth, setUser);
+                };
+                initFirebase();
+            }, []);
+
+            const startQuiz = () => {
+                if (!student.id || !student.name) return alert("학번과 이름을 입력해주세요.");
+                const shuffled = [...ALL_QUESTIONS].sort(() => Math.random() - 0.5);
+                setShuffledQuestions(shuffled);
+                setStep('quiz');
+            };
+
+            const submitQuiz = async () => {
+                if (essay.length < 30) return alert("소감문을 30자 이상 작성해주세요.");
+                
+                const score = shuffledQuestions.reduce((acc, q) => {
+                    const userAns = answers[q.id];
+                    let isCorrect = false;
+                    if (q.type === 'subjective') isCorrect = q.check(userAns || '');
+                    else if (q.type === 'ox') isCorrect = userAns === q.answer;
+                    else if (q.type === 'mcq') isCorrect = parseInt(userAns) === q.answer;
+                    return isCorrect ? acc + 1 : acc;
+                }, 0);
+
+                const resultData = {
+                    studentId: student.id,
+                    studentName: student.name,
+                    score,
+                    total: shuffledQuestions.length,
+                    answers,
+                    essay,
+                    timestamp: new Date().toISOString()
+                };
+
+                if (user && db) {
+                    const appId = typeof __app_id !== 'undefined' ? __app_id : 'art-assessment-v2';
+                    try {
+                        const colRef = fb.collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results');
+                        await fb.addDoc(colRef, resultData);
+                    } catch (e) { console.error("Save Error:", e); }
+                }
+                setStep('result');
+            };
+
+            const getCategoryColor = (cat) => {
+                switch(cat) {
+                    case '인상주의': return 'bg-amber-400';
+                    case '후기인상주의': return 'bg-sky-500';
+                    case '입체주의': return 'bg-purple-500';
+                    case '표현주의': return 'bg-rose-500';
+                    default: return 'bg-slate-300';
+                }
+            };
+
+            if (step === 'login') return (
+                <div className="flex items-center justify-center min-h-screen p-4">
+                    <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md border-t-8 border-indigo-600">
+                        <h1 className="text-2xl font-black text-center text-gray-800 mb-2">🎨 근대 미술 진단 평가</h1>
+                        <p className="text-gray-500 text-center text-sm mb-8">학습 내용을 얼마나 기억하고 있는지 확인해봐요!</p>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-bold text-gray-700 mb-1">학번</label>
+                                <input 
+                                    type="text" 
+                                    placeholder="예: 30101"
+                                    className="w-full p-4 bg-gray-50 border-2 border-gray-100 rounded-xl focus:border-indigo-500 outline-none transition-all"
+                                    value={student.id}
+                                    onChange={e => setStudent({...student, id: e.target.value})}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-bold text-gray-700 mb-1">이름</label>
+                                <input 
+                                    type="text" 
+                                    placeholder="성함을 입력하세요"
+                                    className="w-full p-4 bg-gray-50 border-2 border-gray-100 rounded-xl focus:border-indigo-500 outline-none transition-all"
+                                    value={student.name}
+                                    onChange={e => setStudent({...student, name: e.target.value})}
+                                />
+                            </div>
+                            <button 
+                                onClick={() => setStep('ladder')}
+                                className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-indigo-700 transition-all shadow-lg"
+                            >
+                                시험 시작하기
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            if (step === 'ladder') return (
+                <div className="flex flex-col items-center justify-center min-h-screen p-4">
+                    <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md text-center">
+                        <h2 className="text-xl font-bold mb-4">🎢 보너스 사다리 선택!</h2>
+                        <p className="text-gray-600 mb-8 text-sm">운명의 숫자를 골라보세요. 랜덤하게 문제가 섞입니다.</p>
+                        <div className="grid grid-cols-4 gap-3">
+                            {[1, 2, 3, 4].map(num => (
+                                <button 
+                                    key={num}
+                                    onClick={startQuiz}
+                                    className="aspect-square bg-indigo-50 border-4 border-indigo-100 rounded-2xl flex items-center justify-center text-2xl font-black text-indigo-500 hover:bg-indigo-500 hover:text-white transition-all transform hover:scale-105 shadow-sm"
+                                >
+                                    {num}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            if (step === 'quiz') {
+                const q = shuffledQuestions[currentIndex];
+                return (
+                    <div className="flex flex-col items-center justify-start min-h-screen p-4 pt-10">
+                        <div className="w-full max-w-lg">
+                            <div className="w-full h-2 bg-gray-100 rounded-full mb-6 overflow-hidden">
+                                <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${((currentIndex + 1) / shuffledQuestions.length) * 100}%` }}></div>
+                            </div>
+                            <div className="bg-white p-8 rounded-[35px] shadow-lg border-2 border-gray-50 relative overflow-hidden">
+                                {/* Category Color Bar (Text Removed) */}
+                                <div className={`absolute top-0 left-0 right-0 h-3 ${getCategoryColor(q.category)}`}></div>
+                                
+                                <div className="flex justify-between items-center mt-2 mb-6">
+                                    <div className="flex gap-1.5">
+                                        <div className={`w-3 h-3 rounded-full ${getCategoryColor(q.category)}`}></div>
+                                        <div className="w-3 h-3 rounded-full bg-gray-100"></div>
+                                        <div className="w-3 h-3 rounded-full bg-gray-100"></div>
+                                    </div>
+                                    <span className="text-gray-400 text-xs font-black tracking-widest">{currentIndex + 1} / {shuffledQuestions.length}</span>
+                                </div>
+
+                                <h2 className="text-xl font-bold text-gray-800 leading-relaxed mb-8">
+                                    {q.question}
+                                </h2>
+
+                                {q.type === 'subjective' && (
+                                    <input 
+                                        type="text"
+                                        autoFocus
+                                        className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:border-indigo-500 focus:bg-white outline-none text-lg font-medium transition-all"
+                                        placeholder="답안을 입력해 주세요"
+                                        value={answers[q.id] || ''}
+                                        onChange={e => setAnswers({...answers, [q.id]: e.target.value})}
+                                        onKeyPress={e => e.key === 'Enter' && (currentIndex < shuffledQuestions.length - 1 ? setCurrentIndex(currentIndex + 1) : setStep('essay'))}
+                                    />
+                                )}
+
+                                {q.type === 'ox' && (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        {['O', 'X'].map(val => (
+                                            <button 
+                                                key={val}
+                                                onClick={() => { setAnswers({...answers, [q.id]: val}); if(currentIndex < shuffledQuestions.length - 1) setCurrentIndex(currentIndex + 1); else setStep('essay'); }}
+                                                className={`py-8 rounded-2xl border-4 text-4xl font-black transition-all ${answers[q.id] === val ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-50 text-slate-200 hover:border-indigo-100'}`}
+                                            >
+                                                {val}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {q.type === 'mcq' && (
+                                    <div className="space-y-3">
+                                        {q.options.map((opt, i) => (
+                                            <button 
+                                                key={i}
+                                                onClick={() => { setAnswers({...answers, [q.id]: i}); if(currentIndex < shuffledQuestions.length - 1) setCurrentIndex(currentIndex + 1); else setStep('essay'); }}
+                                                className={`w-full p-5 rounded-2xl text-left border-2 transition-all font-bold text-base ${answers[q.id] === i ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'bg-white border-slate-50 hover:border-indigo-100 text-slate-600'}`}
+                                            >
+                                                <span className="inline-block w-6 h-6 rounded-full bg-slate-100 text-slate-400 text-xs text-center leading-6 mr-3">{i+1}</span>
+                                                {opt}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="mt-8 flex justify-between px-2">
+                                <button 
+                                    onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))}
+                                    disabled={currentIndex === 0}
+                                    className="px-6 py-3 text-gray-400 font-bold disabled:opacity-0 transition-opacity"
+                                >
+                                    이전으로
+                                </button>
+                                {currentIndex < shuffledQuestions.length - 1 ? (
+                                    <button onClick={() => setCurrentIndex(currentIndex + 1)} className="bg-slate-800 text-white px-8 py-3 rounded-2xl font-bold shadow-lg">다음 문제</button>
+                                ) : (
+                                    <button onClick={() => setStep('essay')} className="bg-indigo-600 text-white px-8 py-3 rounded-2xl font-bold shadow-lg">서술형 작성</button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (step === 'essay') return (
+                <div className="flex flex-col items-center justify-start min-h-screen p-4 pt-10">
+                    <div className="w-full max-w-lg bg-white p-8 rounded-[40px] shadow-xl border-t-8 border-indigo-600">
+                        <h2 className="text-2xl font-black mb-3">🖋️ 수업을 마치며</h2>
+                        <p className="text-gray-500 text-sm leading-relaxed mb-8">
+                            카메라의 발명으로 인해 화가들이 겪었을 혼란과 이를 극복하기 위한 새로운 시도들을 학습했습니다. 현대 사회를 살아가는 본인의 느낌과 태도를 자유롭게 적어주세요.
+                        </p>
+                        <textarea 
+                            className="w-full h-56 p-5 bg-slate-50 border-2 border-slate-50 rounded-[25px] focus:border-indigo-500 focus:bg-white outline-none resize-none text-base leading-relaxed transition-all"
+                            placeholder="최소 30자 이상 입력해 주세요 (최대 500자)"
+                            maxLength={500}
+                            value={essay}
+                            onChange={e => setEssay(e.target.value)}
+                        />
+                        <div className="flex justify-between items-center mt-6">
+                            <span className={`text-xs font-black ${essay.length < 30 ? 'text-rose-400' : 'text-emerald-500'}`}>
+                                글자 수: {essay.length} / 500
+                            </span>
+                            <button 
+                                onClick={submitQuiz}
+                                className="bg-indigo-600 text-white px-10 py-4 rounded-2xl font-bold shadow-xl hover:bg-indigo-700 transition-all active:scale-95"
+                            >
+                                제출 완료하기
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            if (step === 'result') {
+                const analysis = (() => {
+                    const stats = { '인상주의': 0, '후기인상주의': 0, '입체주의': 0, '표현주의': 0 };
+                    const counts = { '인상주의': 0, '후기인상주의': 0, '입체주의': 0, '표현주의': 0 };
+                    shuffledQuestions.forEach(q => {
+                        if (stats[q.category] !== undefined) {
+                            counts[q.category]++;
+                            const userAns = answers[q.id];
+                            let isCorrect = false;
+                            if (q.type === 'subjective') isCorrect = q.check(userAns || '');
+                            else if (q.type === 'ox') isCorrect = userAns === q.answer;
+                            else if (q.type === 'mcq') isCorrect = parseInt(userAns) === q.answer;
+                            if (isCorrect) stats[q.category]++;
+                        }
+                    });
+                    const sorted = Object.entries(stats).map(([k, v]) => ({ name: k, rate: counts[k] > 0 ? (v/counts[k])*100 : 0 }));
+                    const best = sorted.reduce((a, b) => a.rate >= b.rate ? a : b);
+                    const worst = sorted.reduce((a, b) => a.rate <= b.rate ? a : b);
+                    const totalScore = Math.round((shuffledQuestions.reduce((acc, q) => {
+                        const userAns = answers[q.id];
+                        let isCorrect = false;
+                        if (q.type === 'subjective') isCorrect = q.check(userAns || '');
+                        else if (q.type === 'ox') isCorrect = userAns === q.answer;
+                        else if (q.type === 'mcq') isCorrect = parseInt(userAns) === q.answer;
+                        return isCorrect ? acc + 1 : acc;
+                    }, 0) / shuffledQuestions.length) * 100);
+                    return { best, worst, totalScore };
+                })();
+
+                return (
+                    <div className="flex flex-col items-center justify-center min-h-screen p-4">
+                        <div className="bg-white p-10 rounded-[45px] shadow-2xl w-full max-w-md text-center border-4 border-indigo-50">
+                            <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-6 text-emerald-500">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                            </div>
+                            <h2 className="text-2xl font-black text-slate-800 mb-1">{student.name} 학생, 고생했어요!</h2>
+                            <p className="text-slate-400 font-bold text-sm mb-8 tracking-tight">학습 진단 리포트</p>
+                            
+                            <div className="text-6xl font-black text-indigo-600 mb-10">{analysis.totalScore}<span className="text-2xl text-indigo-300">점</span></div>
+
+                            <div className="space-y-4 text-left bg-slate-50 p-7 rounded-[30px] mb-8 border border-slate-100">
+                                <div>
+                                    <div className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">참 잘했어요!</div>
+                                    <div className="text-lg font-black text-slate-700 flex items-center gap-2">
+                                        <div className={`w-3 h-3 rounded-full ${getCategoryColor(analysis.best.name)}`}></div>
+                                        {analysis.best.name}
+                                    </div>
+                                </div>
+                                <div className="pt-4 border-t border-slate-200">
+                                    <div className="text-[10px] font-black text-rose-400 uppercase tracking-widest mb-1">조금 더 복습해 볼까요?</div>
+                                    <div className="text-lg font-black text-slate-700 flex items-center gap-2">
+                                        <div className={`w-3 h-3 rounded-full ${getCategoryColor(analysis.worst.name)}`}></div>
+                                        {analysis.worst.name}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <p className="text-slate-400 text-xs leading-relaxed mb-8 px-4">
+                                진단 결과 데이터는 선생님의 통계 자료로 활용되며,<br/>더 나은 수업을 만드는 데 사용됩니다.
+                            </p>
+
+                            <button onClick={() => window.location.reload()} className="w-full py-5 bg-slate-900 text-white rounded-2xl font-black text-lg hover:bg-black transition-all shadow-xl">
+                                처음으로 돌아가기
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            return null;
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+```eof
